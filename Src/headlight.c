@@ -1,12 +1,11 @@
 #include "headlight.h"
-#include "board_config.h"
-#include "driver_gpio.h"
+#include "driver_led.h"
 #include "driver_adc.h"
 #include "sensor_convert.h"
 
 void headlight_init(void)
 {
-    gpio_output_init(BOARD_LED_HEADLIGHT_PORT, BOARD_LED_HEADLIGHT_PIN);
+    led_set(LED_ID_HEADLIGHT, LED_STATE_OFF);
 }
 
 void headlight_update(void)
@@ -19,10 +18,10 @@ void headlight_update(void)
 
     if (u1t_dark == 1U)
     {
-        gpio_write_pin(BOARD_LED_HEADLIGHT_PORT, BOARD_LED_HEADLIGHT_PIN, GPIO_PIN_STATE_HIGH);
+        led_set(LED_ID_HEADLIGHT, LED_STATE_ON);
     }
     else
     {
-        gpio_write_pin(BOARD_LED_HEADLIGHT_PORT, BOARD_LED_HEADLIGHT_PIN, GPIO_PIN_STATE_LOW);
+        led_set(LED_ID_HEADLIGHT, LED_STATE_OFF);
     }
 }

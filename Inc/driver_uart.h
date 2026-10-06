@@ -6,6 +6,5 @@
 void uart_init(void);
 void uart_send(char const * const p_buffer, uint16_t const u2t_length);
 void uart_send_string(char const * const p_str);
-void uart_send_char(char const c);
 
 #endif

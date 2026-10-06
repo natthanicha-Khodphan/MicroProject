@@ -1,6 +1,7 @@
 #include "driver_buzzer.h"
 #include "board_config.h"
 #include "driver_gpio.h"
+#include "driver_led.h"
 
 /* HW-512 (KY-012) active buzzer: drive pin to the active level to sound */
 
@@ -33,20 +34,20 @@ static void buzzer_write_level(uint8_t const u1t_sound)
 
     gpio_write_pin(BOARD_BUZZER_PORT, BOARD_BUZZER_PIN, u1t_level);
 
+    /* Alert LED mirrors buzzer state (call led_init() before buzzer_init()) */
     if (u1t_sound == 1U)
     {
-        gpio_write_pin(BOARD_BUZZER_MIRROR_LED_PORT, BOARD_BUZZER_MIRROR_LED_PIN, GPIO_PIN_STATE_HIGH);
+        led_set(LED_ID_ALERT, LED_STATE_ON);
     }
     else
     {
-        gpio_write_pin(BOARD_BUZZER_MIRROR_LED_PORT, BOARD_BUZZER_MIRROR_LED_PIN, GPIO_PIN_STATE_LOW);
+        led_set(LED_ID_ALERT, LED_STATE_OFF);
     }
 }
 
 void buzzer_init(void)
 {
     gpio_output_init(BOARD_BUZZER_PORT, BOARD_BUZZER_PIN);
-    gpio_output_init(BOARD_BUZZER_MIRROR_LED_PORT, BOARD_BUZZER_MIRROR_LED_PIN);
     buzzer_off();
 }
 

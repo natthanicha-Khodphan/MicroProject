@@ -7,13 +7,17 @@
 
 #define BOARD_LED_HEADLIGHT_PORT         GPIOA
 #define BOARD_LED_HEADLIGHT_PIN          5U
-#define BOARD_LED_UNUSED_PORT            GPIOA
-#define BOARD_LED_UNUSED_PIN             6U
+/* Red LED PA6 mirrors buzzer state (visual check of LVDA logic) */
+#define BOARD_LED_ALERT_PORT             GPIOA
+#define BOARD_LED_ALERT_PIN              6U
 #define BOARD_LED_REVERSE_WARN_PORT      GPIOA
 #define BOARD_LED_REVERSE_WARN_PIN       7U
 #define BOARD_LED_DRIVE_WARN_PORT        GPIOB
 #define BOARD_LED_DRIVE_WARN_PIN         6U
 
+/* Buttons are active LOW and raise EXTI on the falling edge.
+ * EXTI3 = PB3, EXTI4 = PB4, EXTI9_5 = PB5, EXTI15_10 = PA10:
+ * if a pin changes, check the IRQ handlers in driver_exti.c   */
 #define BOARD_BTN_PARK_PORT              GPIOA
 #define BOARD_BTN_PARK_PIN               10U
 #define BOARD_BTN_RAIN_PORT              GPIOB
@@ -48,9 +52,6 @@
 #define BOARD_BUZZER_PORT                GPIOC
 #define BOARD_BUZZER_PIN                 2U
 #define BOARD_BUZZER_ACTIVE_LOW          0U
-/* Red LED PA6 mirrors buzzer state (visual check of LVDA logic) */
-#define BOARD_BUZZER_MIRROR_LED_PORT     BOARD_LED_UNUSED_PORT
-#define BOARD_BUZZER_MIRROR_LED_PIN      BOARD_LED_UNUSED_PIN
 
 #define BOARD_OLED_SCL_PORT              GPIOB
 #define BOARD_OLED_SCL_PIN               8U
@@ -83,6 +84,7 @@
 #define ZONE_CAUTION_RAIN                25U
 #define ZONE_CRITICAL_RAIN               55U
 #define REDLIGHT_BUZZER_DELTA            5U
+#define REDLIGHT_ARM_GAP_MIN             90U   /* LVDA armed only if stopped this close (90-100%) */
 #define JOY_CENTER_VALUE                 2048U
 #define JOY_DEADZONE                     300U
 

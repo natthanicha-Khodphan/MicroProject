@@ -1,7 +1,7 @@
 #include "gear_fsm.h"
 #include "board_config.h"
 #include "driver_adc.h"
-#include "driver_gpio.h"
+#include "driver_led.h"
 #include "driver_uart.h"
 #include "driver_oled.h"
 #include "driver_buzzer.h"
@@ -30,8 +30,6 @@
 #define FIXED4_LEN                        4U
 #define REDLIGHT_BEEP_ON_TICKS            15U   /* 150ms ON  */
 #define REDLIGHT_BEEP_PERIOD_TICKS        30U   /* 300ms period */
-#define FSM_PRINTED_NO                    0U
-#define FSM_PRINTED_YES                   1U
 
 /* Speed dynamics: speed kept in 0.01 km/h units, updated every 10ms tick.
  * value per tick x 100 ticks/s / 100 = km/h per second                    */
@@ -163,7 +161,50 @@ static uint16_t fsm_append_fixed4(char * const p_buf, uint16_t const u2t_off, ui
     return (uint16_t) (u2t_off + FIXED4_LEN);
 }
 
-static void fsm_update_warning_led(uint16_t const u2t_gap, GPIO_TypeDef * const p_port, uint32_t const u4t_pin)
+static void fsm_handle_buttons(uint8_t const u1t_events)
+{
+    /* Button 1: Park lock toggle */
+    if ((u1t_events & BTN_EVENT_PARK) != 0U)
+    {
+        gear_fsm_toggle_park_lock();
+    }
+    else
+    {
+        /* no event */
+    }
+
+    /* Button 2: Rain mode toggle */
+    if ((u1t_events & BTN_EVENT_RAIN) != 0U)
+    {
+        gear_fsm_toggle_rain();
+    }
+    else
+    {
+        /* no event */
+    }
+
+    /* Button 3: Red light mode toggle */
+    if ((u1t_events & BTN_EVENT_REDLIGHT) != 0U)
+    {
+        gear_fsm_toggle_redlight();
+    }
+    else
+    {
+        /* no event */
+    }
+
+    /* Button 4: Emergency brake toggle */
+    if ((u1t_events & BTN_EVENT_BRAKE) != 0U)
+    {
+        safety_brake_toggle();
+    }
+    else
+    {
+        /* no event */
+    }
+}
+
+static void fsm_update_warning_led(uint16_t const u2t_gap, uint8_t const u1t_led_id)
 {
     uint16_t u2t_caution;
     uint16_t u2t_period;
@@ -180,7 +221,7 @@ static void fsm_update_warning_led(uint16_t const u2t_gap, GPIO_TypeDef * const 
 
     if (u2t_gap < u2t_caution)
     {
-        gpio_write_pin(p_port, u4t_pin, GPIO_PIN_STATE_LOW);
+        led_set(u1t_led_id, LED_STATE_OFF);
         gu2t_blink_counter = 0U;
     }
     else
@@ -217,11 +258,11 @@ static void fsm_update_warning_led(uint16_t const u2t_gap, GPIO_TypeDef * const 
 
         if (gu2t_blink_counter < u2t_half)
         {
-            gpio_write_pin(p_port, u4t_pin, GPIO_PIN_STATE_HIGH);
+            led_set(u1t_led_id, LED_STATE_ON);
         }
         else
         {
-            gpio_write_pin(p_port, u4t_pin, GPIO_PIN_STATE_LOW);
+            led_set(u1t_led_id, LED_STATE_OFF);
         }
     }
 }
@@ -246,9 +287,10 @@ static void fsm_update_redlight_buzzer(uint16_t const u2t_gap)
         }
 
         /* Lead Vehicle Departure Alert (LVDA):
-         * stopped (speed == 0) and gap drops below baseline - delta */
+         * stopped (speed == 0) right behind the lead car (closest gap
+         * 90-100%), then gap drops below baseline - delta (car pulls away) */
         if ((gu2t_speed == 0U) &&
-            (gu2t_redlight_baseline > REDLIGHT_BUZZER_DELTA) &&
+            (gu2t_redlight_baseline >= REDLIGHT_ARM_GAP_MIN) &&
             (u2t_gap < (gu2t_redlight_baseline - REDLIGHT_BUZZER_DELTA)))
         {
             gu2t_buzzer_counter++;
@@ -335,12 +377,10 @@ static char const * fsm_get_mode_str(void)
     return p_str;
 }
 
-static uint8_t fsm_send_uart_dashboard(uint16_t const u2t_raw_pot, uint16_t const u2t_joy_raw)
+static void fsm_send_uart_dashboard(uint16_t const u2t_raw_pot, uint16_t const u2t_joy_raw)
 {
     uint16_t u2t_off;
-    uint8_t u1t_printed;
 
-    u1t_printed = FSM_PRINTED_NO;
     gu2t_print_counter++;
 
     if (gu2t_print_counter >= DASHBOARD_PRINT_DIVIDER)
@@ -366,15 +406,13 @@ static uint8_t fsm_send_uart_dashboard(uint16_t const u2t_raw_pot, uint16_t cons
         u2t_off = util_copy_str(fsm_get_mode_str(), gac_uart_buf, u2t_off);
         u2t_off = util_copy_str("\r\n", gac_uart_buf, u2t_off);
 
+        /* Non-blocking: queued for DMA, returns immediately */
         uart_send(gac_uart_buf, u2t_off);
-        u1t_printed = FSM_PRINTED_YES;
     }
     else
     {
         /* not time to print yet */
     }
-
-    return u1t_printed;
 }
 
 static void fsm_update_oled(void)
@@ -681,8 +719,8 @@ void gear_fsm_tick(void)
     uint16_t u2t_joy_raw;
     int16_t s2t_joy_speed;
 
-    /* Scan all 4 buttons with debounce */
-    buttons_scan_tick();
+    /* Button events (EXTI edge + debounce in driver), handled here */
+    fsm_handle_buttons(exti_buttons_scan_tick());
 
     u2t_pot_raw = adc_get_pot_raw();
     gu2t_gap_pct = sensor_get_closeness_pct(u2t_pot_raw);
@@ -694,30 +732,24 @@ void gear_fsm_tick(void)
     /* Warning LEDs by direction: PB6 for DRIVE, PA7 for REVERSE */
     if (gu1t_state == GEAR_STATE_DRIVE)
     {
-        fsm_update_warning_led(gu2t_gap_pct, BOARD_LED_DRIVE_WARN_PORT, BOARD_LED_DRIVE_WARN_PIN);
-        gpio_write_pin(BOARD_LED_REVERSE_WARN_PORT, BOARD_LED_REVERSE_WARN_PIN, GPIO_PIN_STATE_LOW);
+        fsm_update_warning_led(gu2t_gap_pct, LED_ID_DRIVE_WARN);
+        led_set(LED_ID_REVERSE_WARN, LED_STATE_OFF);
     }
     else if (gu1t_state == GEAR_STATE_REVERSE)
     {
-        fsm_update_warning_led(gu2t_gap_pct, BOARD_LED_REVERSE_WARN_PORT, BOARD_LED_REVERSE_WARN_PIN);
-        gpio_write_pin(BOARD_LED_DRIVE_WARN_PORT, BOARD_LED_DRIVE_WARN_PIN, GPIO_PIN_STATE_LOW);
+        fsm_update_warning_led(gu2t_gap_pct, LED_ID_REVERSE_WARN);
+        led_set(LED_ID_DRIVE_WARN, LED_STATE_OFF);
     }
     else
     {
-        gpio_write_pin(BOARD_LED_DRIVE_WARN_PORT, BOARD_LED_DRIVE_WARN_PIN, GPIO_PIN_STATE_LOW);
-        gpio_write_pin(BOARD_LED_REVERSE_WARN_PORT, BOARD_LED_REVERSE_WARN_PIN, GPIO_PIN_STATE_LOW);
+        led_set(LED_ID_DRIVE_WARN, LED_STATE_OFF);
+        led_set(LED_ID_REVERSE_WARN, LED_STATE_OFF);
     }
 
     /* Redlight buzzer logic (PA6 red LED mirrors buzzer) */
     fsm_update_redlight_buzzer(gu2t_gap_pct);
 
-    /* Output: skip OLED on the tick UART prints so one tick never exceeds 10ms */
-    if (fsm_send_uart_dashboard(u2t_pot_raw, u2t_joy_raw) == FSM_PRINTED_NO)
-    {
-        fsm_update_oled();
-    }
-    else
-    {
-        /* OLED waits for next tick */
-    }
+    /* Output: UART is queued to DMA, so OLED can run on the same tick */
+    fsm_send_uart_dashboard(u2t_pot_raw, u2t_joy_raw);
+    fsm_update_oled();
 }
