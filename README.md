@@ -11,6 +11,7 @@ Nucleo-F4 + STEO Training Shield Rev 02.00
 | Button 2 | PB3 | Rain mode (max 120 km/h, earlier braking) |
 | Button 3 | PB5 | Red-light mode (lead vehicle departure alert) |
 | Button 4 | PB4 | Emergency brake |
+| IR obstacle sensor (KY-032 type) | PB2 (CN10-22), 3V3 | Real obstacle ahead: AEB to 0 in D |
 | Buzzer HW-512 | PC2 | Alert (drive via NPN transistor, 5V) |
 | LED PB6 / PA7 | | Drive / Reverse proximity warning |
 | LED PA6 | | Mirrors buzzer |
@@ -26,7 +27,7 @@ Main loop: TIM2 10 ms tick. Speed model: accel/decel ramps (D 0-200, R 0-30 km/h
 | GPIO | Output: 4 LEDs, buzzer. Input pull-up: 4 buttons, joystick SW | `driver_gpio.c`, `driver_led.c` |
 | UART2 TX | DMA1 Stream6 Ch4 + transfer-complete IRQ, 1 KB ring buffer (no polling) | `driver_uart.c` |
 | ADC1 | 4-channel scan, DMA2 Stream0 circular (no polling) | `driver_adc.c` |
-| EXTI | Lines 3, 4, 5, 10 falling edge (buttons), debounce confirmed on 10 ms tick | `driver_exti.c` |
+| EXTI | Lines 3, 4, 5, 10 falling edge (buttons), debounce confirmed on 10 ms tick. Line 2 (IR obstacle): asserts on edge, releases after 200 ms clear | `driver_exti.c` |
 | TIM2 | Update IRQ every 10 ms (control tick) | `driver_tim.c` |
 | I2C1 | 400 kHz, SH1106 OLED | `driver_i2c.c`, `driver_oled.c` |
 

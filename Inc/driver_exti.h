@@ -11,5 +11,7 @@
 
 void exti_buttons_init(void);
 uint8_t exti_buttons_scan_tick(void);
+void exti_obstacle_init(void);
+uint8_t exti_obstacle_scan_tick(void);
 
 #endif

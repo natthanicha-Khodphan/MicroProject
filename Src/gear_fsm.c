@@ -55,6 +55,7 @@ static uint16_t gu2t_oled_counter = 0U;
 static uint8_t gu1t_oled_line_idx = 0U;
 static uint16_t gu2t_buzzer_counter = 0U;
 static uint16_t gu2t_redlight_baseline = 0U;
+static uint8_t gu1t_obstacle = 0U;
 static char gac_uart_buf[DASHBOARD_BUFFER_SIZE];
 static char gac_oled_line[OLED_LINE_BUF_SIZE];
 
@@ -72,6 +73,7 @@ void gear_fsm_init(void)
     gu1t_oled_line_idx = 0U;
     gu2t_buzzer_counter = 0U;
     gu2t_redlight_baseline = 0U;
+    gu1t_obstacle = 0U;
 }
 
 void gear_fsm_toggle_park_lock(void)
@@ -267,9 +269,32 @@ static void fsm_update_warning_led(uint16_t const u2t_gap, uint8_t const u1t_led
     }
 }
 
+static uint8_t fsm_is_obstacle_ahead(void)
+{
+    uint8_t u1t_ahead;
+
+    /* IR sensor faces forward: it only matters when moving / pushing in D */
+    if ((gu1t_obstacle == 1U) && (gu1t_move_dir == MOVE_DIR_FORWARD))
+    {
+        u1t_ahead = 1U;
+    }
+    else
+    {
+        u1t_ahead = 0U;
+    }
+
+    return u1t_ahead;
+}
+
 static void fsm_update_redlight_buzzer(uint16_t const u2t_gap)
 {
-    if ((gu1t_mode_flags & MODE_FLAG_REDLIGHT) != 0U)
+    if ((fsm_is_obstacle_ahead() == 1U) && (gu2t_speed != 0U))
+    {
+        /* Obstacle AEB in progress: continuous tone until stopped */
+        buzzer_on();
+        gu2t_buzzer_counter = 0U;
+    }
+    else if ((gu1t_mode_flags & MODE_FLAG_REDLIGHT) != 0U)
     {
         if (gu2t_speed != 0U)
         {
@@ -356,6 +381,10 @@ static char const * fsm_get_mode_str(void)
     if (safety_brake_is_active() == 1U)
     {
         p_str = "BRAKE";
+    }
+    else if (gu1t_obstacle == 1U)
+    {
+        p_str = "OBSTACLE";
     }
     else if ((u1t_rain != 0U) && (u1t_red != 0U))
     {
@@ -623,6 +652,15 @@ static void fsm_update_speed(int16_t const s2t_joy_speed)
     {
         /* D: joystick 0..200 -> target 0..200 km/h, limited by gap / rain */
         u2t_limit = fsm_get_gap_limit();
+        if (gu1t_obstacle == 1U)
+        {
+            /* Real obstacle in front (IR sensor): no forward speed allowed */
+            u2t_limit = 0U;
+        }
+        else
+        {
+            /* path clear: gap limit applies */
+        }
         u2t_target = u2t_joy_abs;
         u2t_accel = ACCEL_DRIVE_PER_TICK;
         if (u2t_target > u2t_limit)
@@ -665,8 +703,9 @@ static void fsm_update_speed(int16_t const s2t_joy_speed)
         u2t_decel = DECEL_COAST_PER_TICK;
     }
 
-    /* Obstacle inside critical zone: automatic emergency braking */
-    if ((fsm_is_critical_zone() == 1U) && (u2t_decel < DECEL_EMERGENCY_PER_TICK))
+    /* Critical gap or real obstacle ahead: automatic emergency braking */
+    if (((fsm_is_critical_zone() == 1U) || (fsm_is_obstacle_ahead() == 1U))
+        && (u2t_decel < DECEL_EMERGENCY_PER_TICK))
     {
         u2t_decel = DECEL_EMERGENCY_PER_TICK;
     }
@@ -722,6 +761,9 @@ void gear_fsm_tick(void)
     /* Button events (EXTI edge + debounce in driver), handled here */
     fsm_handle_buttons(exti_buttons_scan_tick());
 
+    /* IR obstacle sensor (EXTI edge, filtered in driver) */
+    gu1t_obstacle = exti_obstacle_scan_tick();
+
     u2t_pot_raw = adc_get_pot_raw();
     gu2t_gap_pct = sensor_get_closeness_pct(u2t_pot_raw);
     u2t_joy_raw = sensor_get_joy_axis_raw(adc_get_joy_vrx_raw(), adc_get_joy_vry_raw());
@@ -730,7 +772,13 @@ void gear_fsm_tick(void)
     fsm_update_speed(s2t_joy_speed);
 
     /* Warning LEDs by direction: PB6 for DRIVE, PA7 for REVERSE */
-    if (gu1t_state == GEAR_STATE_DRIVE)
+    if ((gu1t_state == GEAR_STATE_DRIVE) && (gu1t_obstacle == 1U))
+    {
+        /* Obstacle ahead: drive warning LED steady ON */
+        led_set(LED_ID_DRIVE_WARN, LED_STATE_ON);
+        led_set(LED_ID_REVERSE_WARN, LED_STATE_OFF);
+    }
+    else if (gu1t_state == GEAR_STATE_DRIVE)
     {
         fsm_update_warning_led(gu2t_gap_pct, LED_ID_DRIVE_WARN);
         led_set(LED_ID_REVERSE_WARN, LED_STATE_OFF);

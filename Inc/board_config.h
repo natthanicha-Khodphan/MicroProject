@@ -27,6 +27,12 @@
 #define BOARD_BTN_BRAKE_PORT             GPIOB
 #define BOARD_BTN_BRAKE_PIN              4U
 
+/* IR obstacle avoidance module (KY-032 type): OUT LOW = obstacle.
+ * Morpho CN10 pin 22, EXTI2. Power the module from 3V3.          */
+#define BOARD_OBSTACLE_PORT              GPIOB
+#define BOARD_OBSTACLE_PIN               2U
+#define BOARD_OBSTACLE_ACTIVE_LOW        1U
+
 #define BOARD_POT_PORT                   GPIOA
 #define BOARD_POT_PIN                    4U
 #define BOARD_POT_ADC_CHANNEL            4U

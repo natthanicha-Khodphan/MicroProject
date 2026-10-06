@@ -59,6 +59,7 @@ int main(void)
 
     /* Initialize inputs and peripherals */
     exti_buttons_init();
+    exti_obstacle_init();
     adc_quad_init();
     for (u4t_delay = 0U; u4t_delay < ADC_SETTLE_DELAY_COUNT; u4t_delay++)
     {
@@ -67,6 +68,7 @@ int main(void)
     sensor_joy_calibrate(adc_get_joy_vrx_raw(), adc_get_joy_vry_raw());
     sensor_ldr_calibrate(adc_get_ldr_raw());
     uart_send_string("[BOOT] ADC (DMA) & Buttons (EXTI) OK (joystick + light calibrated)\r\n");
+    uart_send_string("[BOOT] IR obstacle sensor on PB2 (EXTI2)\r\n");
 
     /* Initialize I2C and OLED */
     i2c1_init();

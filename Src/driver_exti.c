@@ -15,6 +15,13 @@
 #define EXTI_EXTICR_MASK                 0xFU
 #define EXTI_LINE_GROUP_9_5_FIRST        5U
 #define EXTI_LINE_GROUP_9_5_LAST         9U
+#define EXTI_EDGE_FALLING                0U
+#define EXTI_EDGE_RISING                 1U
+
+/* Obstacle sensor: edge from EXTI asserts at once (fast reaction),
+ * release only after the pin stays inactive 20 ticks = 200ms
+ * so the IR output chattering at the range limit is ignored.     */
+#define OBSTACLE_RELEASE_TICKS           20U
 
 #define BTN_COUNT                        4U
 #define BTN_IDX_PARK                     0U
@@ -40,6 +47,10 @@ static exti_button_t const gast_buttons[BTN_COUNT] =
 static volatile uint8_t gau1t_edge_pending[BTN_COUNT];   /* set by EXTI ISR */
 static uint8_t gau1t_debounce_cnt[BTN_COUNT];
 static uint8_t gau1t_pressed[BTN_COUNT];
+
+static volatile uint8_t gu1t_obstacle_edge = 0U;          /* set by EXTI ISR */
+static uint8_t gu1t_obstacle_present = 0U;
+static uint8_t gu1t_obstacle_release_cnt = 0U;
 
 static uint32_t exti_get_port_code(GPIO_TypeDef const * const p_port)
 {
@@ -97,7 +108,7 @@ static IRQn_Type exti_get_irqn(uint32_t const u4t_pin)
     return e_irqn;
 }
 
-static void exti_line_init(GPIO_TypeDef * const p_port, uint32_t const u4t_pin)
+static void exti_line_init(GPIO_TypeDef * const p_port, uint32_t const u4t_pin, uint8_t const u1t_edge)
 {
     uint32_t u4t_reg_idx;
     uint32_t u4t_shift;
@@ -113,10 +124,18 @@ static void exti_line_init(GPIO_TypeDef * const p_port, uint32_t const u4t_pin)
     u4t_exticr = u4t_exticr | (exti_get_port_code(p_port) << u4t_shift);
     SYSCFG->EXTICR[u4t_reg_idx] = u4t_exticr;
 
-    /* Falling edge only (press), unmask, clear any stale pending bit */
+    /* One edge only, unmask, clear any stale pending bit */
     u4t_line_mask = 1UL << u4t_pin;
-    EXTI->RTSR = EXTI->RTSR & (~u4t_line_mask);
-    EXTI->FTSR = EXTI->FTSR | u4t_line_mask;
+    if (u1t_edge == EXTI_EDGE_RISING)
+    {
+        EXTI->FTSR = EXTI->FTSR & (~u4t_line_mask);
+        EXTI->RTSR = EXTI->RTSR | u4t_line_mask;
+    }
+    else
+    {
+        EXTI->RTSR = EXTI->RTSR & (~u4t_line_mask);
+        EXTI->FTSR = EXTI->FTSR | u4t_line_mask;
+    }
     EXTI->PR = u4t_line_mask;
     EXTI->IMR = EXTI->IMR | u4t_line_mask;
 
@@ -142,8 +161,93 @@ void exti_buttons_init(void)
 
         /* Buttons are active LOW: pull-up input */
         gpio_input_pullup_init(gast_buttons[u4t_idx].p_port, gast_buttons[u4t_idx].u4t_pin);
-        exti_line_init(gast_buttons[u4t_idx].p_port, gast_buttons[u4t_idx].u4t_pin);
+        exti_line_init(gast_buttons[u4t_idx].p_port, gast_buttons[u4t_idx].u4t_pin, EXTI_EDGE_FALLING);
     }
+}
+
+void exti_obstacle_init(void)
+{
+    RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+
+    gu1t_obstacle_edge = 0U;
+    gu1t_obstacle_present = 0U;
+    gu1t_obstacle_release_cnt = 0U;
+
+    /* Pull-up keeps the line inactive (no obstacle) if the module is unplugged */
+    gpio_input_pullup_init(BOARD_OBSTACLE_PORT, BOARD_OBSTACLE_PIN);
+
+    /* Interrupt on the edge where an obstacle appears */
+    if (BOARD_OBSTACLE_ACTIVE_LOW == 1U)
+    {
+        exti_line_init(BOARD_OBSTACLE_PORT, BOARD_OBSTACLE_PIN, EXTI_EDGE_FALLING);
+    }
+    else
+    {
+        exti_line_init(BOARD_OBSTACLE_PORT, BOARD_OBSTACLE_PIN, EXTI_EDGE_RISING);
+    }
+}
+
+static uint8_t exti_obstacle_pin_active(void)
+{
+    uint8_t u1t_level;
+    uint8_t u1t_active;
+
+    u1t_level = gpio_read_pin(BOARD_OBSTACLE_PORT, BOARD_OBSTACLE_PIN);
+
+    if (BOARD_OBSTACLE_ACTIVE_LOW == 1U)
+    {
+        if (u1t_level == GPIO_PIN_STATE_LOW)
+        {
+            u1t_active = 1U;
+        }
+        else
+        {
+            u1t_active = 0U;
+        }
+    }
+    else
+    {
+        if (u1t_level == GPIO_PIN_STATE_HIGH)
+        {
+            u1t_active = 1U;
+        }
+        else
+        {
+            u1t_active = 0U;
+        }
+    }
+
+    return u1t_active;
+}
+
+uint8_t exti_obstacle_scan_tick(void)
+{
+    if ((gu1t_obstacle_edge == 1U) || (exti_obstacle_pin_active() == 1U))
+    {
+        /* Edge seen by EXTI or pin still active: obstacle present now */
+        gu1t_obstacle_edge = 0U;
+        gu1t_obstacle_present = 1U;
+        gu1t_obstacle_release_cnt = 0U;
+    }
+    else if (gu1t_obstacle_present == 1U)
+    {
+        gu1t_obstacle_release_cnt = (uint8_t) (gu1t_obstacle_release_cnt + 1U);
+        if (gu1t_obstacle_release_cnt >= OBSTACLE_RELEASE_TICKS)
+        {
+            gu1t_obstacle_present = 0U;
+            gu1t_obstacle_release_cnt = 0U;
+        }
+        else
+        {
+            /* wait until the path stays clear */
+        }
+    }
+    else
+    {
+        /* no obstacle */
+    }
+
+    return gu1t_obstacle_present;
 }
 
 static uint8_t button_debounce(uint32_t const u4t_idx)
@@ -222,12 +326,12 @@ uint8_t exti_buttons_scan_tick(void)
     return u1t_events;
 }
 
-static void exti_service_buttons(void)
+static void exti_service_all(void)
 {
     uint32_t u4t_idx;
     uint32_t u4t_line_mask;
 
-    /* Shared handler: check every button line, clear by writing 1 to PR */
+    /* Shared handler: check every used line, clear by writing 1 to PR */
     for (u4t_idx = 0U; u4t_idx < BTN_COUNT; u4t_idx++)
     {
         u4t_line_mask = 1UL << gast_buttons[u4t_idx].u4t_pin;
@@ -241,28 +345,45 @@ static void exti_service_buttons(void)
             /* this line did not fire */
         }
     }
+
+    u4t_line_mask = 1UL << BOARD_OBSTACLE_PIN;
+    if ((EXTI->PR & u4t_line_mask) != 0U)
+    {
+        EXTI->PR = u4t_line_mask;
+        gu1t_obstacle_edge = 1U;
+    }
+    else
+    {
+        /* obstacle line did not fire */
+    }
+}
+
+/* PB2 Obstacle sensor */
+void EXTI2_IRQHandler(void)
+{
+    exti_service_all();
 }
 
 /* PB3 Rain */
 void EXTI3_IRQHandler(void)
 {
-    exti_service_buttons();
+    exti_service_all();
 }
 
 /* PB4 Emergency brake */
 void EXTI4_IRQHandler(void)
 {
-    exti_service_buttons();
+    exti_service_all();
 }
 
 /* PB5 Red light */
 void EXTI9_5_IRQHandler(void)
 {
-    exti_service_buttons();
+    exti_service_all();
 }
 
 /* PA10 Park lock */
 void EXTI15_10_IRQHandler(void)
 {
-    exti_service_buttons();
+    exti_service_all();
 }
